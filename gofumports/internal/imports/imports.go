@@ -216,6 +216,40 @@ func formatFile(fileSet *token.FileSet, file *ast.File, src []byte, adjust func(
 	return out, nil
 }
 
+type badNodeDetector struct {
+	found ast.Node
+}
+
+func (v *badNodeDetector) Visit(node ast.Node) ast.Visitor {
+	_, ok := node.(*ast.BadExpr)
+	if ok {
+		v.found = node
+		return nil
+	}
+	_, ok = node.(*ast.BadStmt)
+	if ok {
+		v.found = node
+		return nil
+	}
+	_, ok = node.(*ast.BadDecl)
+	if ok {
+		v.found = node
+		return nil
+	}
+
+	return v
+}
+
+func checkBadAST(f *ast.File, originalError error) error {
+	v := &badNodeDetector{nil}
+	ast.Walk(v, f)
+	if v.found != nil {
+		fmt.Printf("%v", v.found)
+		return originalError
+	}
+	return nil
+}
+
 // parse parses src, which was read from filename,
 // as a Go source file or statement list.
 func parse(fset *token.FileSet, filename string, src []byte, opt *Options) (*ast.File, func(orig, src []byte) []byte, error) {
@@ -229,14 +263,9 @@ func parse(fset *token.FileSet, filename string, src []byte, opt *Options) (*ast
 
 	// Try as whole source file.
 	file, err := parser.ParseFile(fset, filename, src, parserMode)
-	if err == nil {
-		return file, nil, nil
-	}
-	// If the error is that the source file didn't begin with a
-	// package line and we accept fragmented input, fall through to
-	// try as a source fragment.  Stop and return on any other error.
-	if !opt.Fragment || !strings.Contains(err.Error(), "expected 'package'") {
-		return nil, nil, err
+	if err == nil || !opt.Fragment || !strings.Contains(err.Error(), "expected 'package'") {
+		err = checkBadAST(file, err)
+		return file, nil, err
 	}
 
 	// If this is a declaration list, make it a source file
